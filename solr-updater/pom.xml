@@ -162,12 +162,6 @@
             <version>1.0.0-SNAPSHOT</version>
             <classifier>vipcore-httpclient</classifier>
         </dependency>
-        <dependency>
-            <groupId>org.eclipse.persistence</groupId>
-            <artifactId>eclipselink</artifactId>
-            <scope>compile</scope>
-        </dependency>
-
     </dependencies>
 
     <build>
