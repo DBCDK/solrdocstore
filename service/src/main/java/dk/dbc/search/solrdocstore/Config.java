@@ -14,6 +14,10 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.Properties;
 import java.util.function.Function;
+import javax.ws.rs.client.Client;
+import javax.ws.rs.client.ClientBuilder;
+import javax.ws.rs.client.ClientRequestContext;
+import javax.ws.rs.client.ClientRequestFilter;
 
 @Stateless
 @Startup
@@ -28,6 +32,7 @@ public class Config {
     private long deleteMarkedDelay;
     private long holdingsQueueDelay;
     private String vipCoreEndpoint;
+    private Client httpClient;
 
     @PostConstruct
     public void loadProperties() {
@@ -40,7 +45,16 @@ public class Config {
         // Number of milliseconds to delay bib entities that are being deleted
         deleteMarkedDelay = getValue(props, "deleteMarkedDelay", "DELETE_MARKED_DELAY", "200000", null, Long::parseUnsignedLong);
         holdingsQueueDelay = getValue(props, "holdingsQueueDelay", "HOLDINGS_QUEUE_DELAY", "300000", null, Long::parseUnsignedLong);
-        vipCoreEndpoint = getValue(props, "vipCoreEndpoint", "VIPCORE_ENDPOINT", "http://vipcore.iscrum-vip-staging.svc.cloud.dbc.dk", "No URL found for VipCore");
+        vipCoreEndpoint = getValue(props, "vipCoreEndpoint", "VIPCORE_ENDPOINT", "http://vipcore.iscrum-vip-staging.svc.cloud.dbc.dk/1.0", "No URL found for VipCore");
+        log.info("Reading/verifying configuration");
+        String userAgent = getValue(props, "userAgent", "USER_AGENT", "SolrDocStoreService/1.0", null);
+        log.debug("Using: {} as HttpUserAgent", userAgent);
+        this.httpClient = clientBuilder()
+                .register((ClientRequestFilter) (ClientRequestContext context) ->
+                        context.getHeaders().putSingle("User-Agent", userAgent)
+                )
+                .build();
+
     }
 
     public String getVipCoreEndpoint() {
@@ -70,6 +84,10 @@ public class Config {
 
     public long getHoldingQueueDelay() {
         return holdingsQueueDelay;
+    }
+
+    public Client getHttpClient() {
+        return httpClient;
     }
 
     private static String getValue(Properties props, String propertyName, String envName, String defaultValue, String error) {
@@ -107,13 +125,23 @@ public class Config {
             Object lookup = InitialContext.doLookup(resourceName);
             if (lookup instanceof Properties) {
                 return (Properties) lookup;
-            } else if(lookup != null) {
+            } else if (lookup != null) {
                 throw new NamingException("Found " + resourceName + ", but not of type Properties of type: " + lookup.getClass().getTypeName());
             }
         } catch (NamingException ex) {
             log.debug("Exception: {}", ex.getMessage());
         }
         return new Properties();
+    }
+
+    /**
+     * Create a clientBuilder (useful for unittesting with specific
+     * implementation)
+     *
+     * @return Http client builder
+     */
+    protected ClientBuilder clientBuilder() {
+        return ClientBuilder.newBuilder();
     }
 
     private static int[] validateTime(String time) {

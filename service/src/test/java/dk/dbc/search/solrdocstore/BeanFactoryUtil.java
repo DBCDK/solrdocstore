@@ -1,13 +1,13 @@
 package dk.dbc.search.solrdocstore;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.google.common.collect.Iterables;
 import dk.dbc.commons.persistence.JpaTestEnvironment;
 import dk.dbc.vipcore.marshallers.LibraryRulesResponse;
 
 import javax.ejb.EJBException;
 import javax.persistence.EntityManager;
 import java.io.IOException;
+import java.io.InputStream;
 import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
 import java.util.Collection;
@@ -129,11 +129,9 @@ public class BeanFactoryUtil {
         return new OpenAgencyProxyBean() {
             @Override
             public OpenAgencyEntity loadOpenAgencyEntry(int agencyId) {
-                try {
-                    String resource = "openagency-" + agencyId + ".json";
-                    LibraryRulesResponse libraryRulesResponse =
-                            new ObjectMapper().readValue(OpenAgencyProxyBeanTest.class.getClassLoader().getResourceAsStream(resource), LibraryRulesResponse.class);
-                    return new OpenAgencyEntity(Iterables.getFirst(libraryRulesResponse.getLibraryRules(), null));
+                String resource = "openagency-" + agencyId + ".json";
+                try (InputStream is = getClass().getClassLoader().getResourceAsStream(resource)) {
+                    return openAgencyEntityFromInputStream(is);
                 } catch (IOException ex) {
                     throw new EJBException(ex);
                 }

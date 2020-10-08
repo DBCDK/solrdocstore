@@ -22,9 +22,9 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.google.common.collect.Iterables;
 import dk.dbc.search.solrdocstore.updater.profile.Profile;
 import dk.dbc.search.solrdocstore.updater.profile.ProfileServiceBean;
+import dk.dbc.vipcore.marshallers.LibraryRules;
 import java.io.File;
 import java.io.IOException;
 import java.lang.reflect.InvocationTargetException;
@@ -44,6 +44,8 @@ import java.util.stream.StreamSupport;
 import javax.ws.rs.client.Client;
 
 import dk.dbc.vipcore.marshallers.LibraryRulesResponse;
+import java.io.FileInputStream;
+import java.io.InputStream;
 import org.apache.solr.common.SolrInputDocument;
 import org.apache.solr.common.SolrInputField;
 import org.junit.Test;
@@ -157,9 +159,8 @@ public class BusinessLogicTest {
         businessLogic.oa = new OpenAgency() {
             @Override
             public OpenAgencyLibraryRule libraryRule(String agencyId) {
-                try {
-                    LibraryRulesResponse libraryRulesResponse = O.readValue(vipCore.resolve(agencyId + ".json").toFile(), LibraryRulesResponse.class);
-                    return new OpenAgencyLibraryRule(Iterables.getFirst(libraryRulesResponse.getLibraryRules(), null));
+                try (InputStream is = new FileInputStream(vipCore.resolve(agencyId + ".json").toFile())){
+                    return new OpenAgencyLibraryRule(libraryRulesFromInputStream(is));
                 } catch (IOException ex) {
                     System.err.println("ex = " + ex);
                     throw new RuntimeException(ex);

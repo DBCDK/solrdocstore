@@ -87,7 +87,7 @@ public class Config {
     private void processVars() throws NumberFormatException {
         String userAgent = get("userAgent", "USER_AGENT", "Unknown/0.0");
         log.debug("Using: {} as HttpUserAgent", userAgent);
-        client = ClientBuilder.newBuilder()
+        client = clientBuilder()
                 .register((ClientRequestFilter) (ClientRequestContext context) -> {
                     context.getHeaders().putSingle("User-Agent", userAgent);
                 }).build();
@@ -123,7 +123,7 @@ public class Config {
         jsonStash = get("jsonStash", "JSON_STASH", "");
         if (!jsonStash.isEmpty() && solrCollections.size() != 1)
             throw new IllegalStateException("To use $JSON_STASH you need exactly ONE solr-collection");
-        vipCoreEndpoint = get("vipCoreEndpoint", "VIPCORE_ENDPOINT", "http://vipcore.iscrum-vip-staging.svc.cloud.dbc.dk");
+        vipCoreEndpoint = get("vipCoreEndpoint", "VIPCORE_ENDPOINT", "http://vipcore.iscrum-vip-staging.svc.cloud.dbc.dk/1.0");
         if (vipCoreEndpoint == null || vipCoreEndpoint.isEmpty()) {
             throw new IllegalStateException("Environment variable VIPCORE_ENDPOINT must be set");
         }
@@ -151,6 +151,16 @@ public class Config {
         }
         log.debug("solrCollections = {}", solrCollections);
         return solrCollections;
+    }
+
+    /**
+     * Create a clientBuilder (useful for unittesting with specific
+     * implementation)
+     *
+     * @return Http client builder
+     */
+    protected ClientBuilder clientBuilder() {
+        return ClientBuilder.newBuilder();
     }
 
     private String getZookeeperPrefix() {

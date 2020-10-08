@@ -1,14 +1,12 @@
 package dk.dbc.search.solrdocstore;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.JsonMappingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.google.common.collect.Iterables;
-import dk.dbc.openagency.http.OpenAgencyException;
 import dk.dbc.openagency.http.VipCoreHttpClient;
-import dk.dbc.vipcore.marshallers.LibraryRules;
 import dk.dbc.vipcore.marshallers.LibraryRulesResponse;
 import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
+import java.io.IOException;
+import java.io.InputStream;
+import java.net.URI;
 import org.eclipse.microprofile.metrics.annotation.Timed;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -16,7 +14,9 @@ import org.slf4j.LoggerFactory;
 import javax.ejb.EJBException;
 import javax.ejb.Stateless;
 import javax.inject.Inject;
-import java.util.List;
+import javax.annotation.PostConstruct;
+import javax.ws.rs.core.MediaType;
+import javax.ws.rs.core.UriBuilder;
 
 /**
  *
@@ -27,31 +27,59 @@ public class OpenAgencyProxyBean {
 
     private static final Logger log = LoggerFactory.getLogger(OpenAgencyProxyBean.class);
 
+    private static final ObjectMapper O = new ObjectMapper();
+
     @Inject
     Config config;
 
-    @Inject
-    private VipCoreHttpClient vipCoreHttpClient;
+    private UriBuilder uriBase;
+    private UriBuilder libraryRulesUri;
+
+    @PostConstruct
+    public void init() {
+        this.uriBase = UriBuilder.fromUri(URI.create(config.getVipCoreEndpoint()))
+                .path("api");
+        this.libraryRulesUri = uriBase.clone()
+// This constant when moved will make the dependency unneeded
+// <dependency>
+//     <groupId>dk.dbc</groupId>
+//     <artifactId>openagency</artifactId>
+//     <version>1.0.0-SNAPSHOT</version>
+//     <classifier>vipcore-httpclient</classifier>
+// </dependency>
+                .path(VipCoreHttpClient.LIBRARY_RULES_PATH)
+                .path("{agencyId}");
+    }
 
     @Timed
     @SuppressFBWarnings(value = "NP_NONNULL_PARAM_VIOLATION")
     public OpenAgencyEntity loadOpenAgencyEntry(int agencyId) {
-        try {
-            String vipCoreResponse = vipCoreHttpClient.getFromVipCore(config.getVipCoreEndpoint(), VipCoreHttpClient.LIBRARY_RULES_PATH + "/" + agencyId);
-            LibraryRulesResponse libraryRulesResponse = new ObjectMapper().readValue(vipCoreResponse, LibraryRulesResponse.class);
-            final List<LibraryRules> libraryRuleList = libraryRulesResponse.getLibraryRules();
-            return libraryRuleList == null ? null : new OpenAgencyEntity(Iterables.getFirst(libraryRuleList, null));
-        } catch (OpenAgencyException e) {
-            log.error("Error happened while fetching vipCore library rules for agency {}: {}", agencyId, e.getMessage());
-            throw new EJBException(e);
-        } catch (JsonMappingException e) {
-            log.error("Unable to unmarshall response from vipCore from agency {}, error: {}", agencyId, e.getMessage());
-            log.debug("Unable to unmarshall response from vipCore from agency {}, error: {}", agencyId, e);
-            throw new EJBException(e);
-        } catch (JsonProcessingException e) {
-            log.error("Unable to unmarshall response from vipCore from agency {}, error: {}", agencyId, e.getMessage());
-            log.debug("Unable to unmarshall response from vipCore from agency {}, error: {}", agencyId, e);
-            throw new EJBException(e);
+        URI uri = libraryRulesUri.build(agencyId);
+        log.debug("Fetching vip-core uri: {}", uri);
+        try (InputStream is = config.getHttpClient()
+                .target(uri)
+// At the moment we don't have a tracking id
+//                .register((ClientRequestFilter) (ClientRequestContext context) ->
+//                        context.getHeaders().putSingle(Constants.XDBCTRACKINGID, "")
+//                )
+                .request(MediaType.APPLICATION_JSON_TYPE)
+                .buildGet()
+                .invoke(InputStream.class)) {
+            return openAgencyEntityFromInputStream(is);
+        } catch (IOException ex) {
+            log.error("Error happened while fetching vipCore library rules for agency {}: {}", agencyId, ex.getMessage());
+            throw new EJBException(ex);
+        }
+    }
+
+    public static OpenAgencyEntity openAgencyEntityFromInputStream(final InputStream is) throws IOException {
+        LibraryRulesResponse libraryRulesResponse = O.readValue(is, LibraryRulesResponse.class);
+        if (libraryRulesResponse != null &&
+            libraryRulesResponse.getLibraryRules() != null &&
+            !libraryRulesResponse.getLibraryRules().isEmpty()) {
+            return new OpenAgencyEntity(libraryRulesResponse.getLibraryRules().get(0));
+        } else {
+            return null;
         }
     }
 

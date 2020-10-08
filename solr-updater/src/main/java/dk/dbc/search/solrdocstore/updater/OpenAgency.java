@@ -1,18 +1,18 @@
 package dk.dbc.search.solrdocstore.updater;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.google.common.collect.Iterables;
 import dk.dbc.gracefulcache.CacheTimeoutException;
 import dk.dbc.gracefulcache.CacheValueException;
 import dk.dbc.gracefulcache.GracefulCache;
-import dk.dbc.openagency.http.OpenAgencyException;
 import dk.dbc.openagency.http.VipCoreHttpClient;
 import dk.dbc.pgqueue.consumer.PostponedNonFatalQueueError;
 import dk.dbc.vipcore.marshallers.LibraryRule;
 import dk.dbc.vipcore.marshallers.LibraryRules;
 import dk.dbc.vipcore.marshallers.LibraryRulesResponse;
 import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
+import java.io.IOException;
+import java.io.InputStream;
+import java.net.URI;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -25,11 +25,11 @@ import javax.ejb.Singleton;
 import javax.ejb.Startup;
 import javax.enterprise.concurrent.ManagedExecutorService;
 import javax.inject.Inject;
-import javax.ws.rs.client.Client;
-import javax.ws.rs.client.ClientBuilder;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
+import javax.ws.rs.core.MediaType;
+import javax.ws.rs.core.UriBuilder;
 
 /**
  *
@@ -41,6 +41,9 @@ import java.util.concurrent.ExecutorService;
 public class OpenAgency {
 
     private static final Logger log = LoggerFactory.getLogger(OpenAgency.class);
+
+    private static final ObjectMapper O = new ObjectMapper();
+
     private static final String RESEARCH_LIBRARY = "Forskningsbibliotek";
 
     public static class OpenAgencyLibraryRule {
@@ -61,10 +64,13 @@ public class OpenAgency {
             this.auth_create_common_record = auth_create_common_record;
         }
 
-        @SuppressFBWarnings(value = {"NP_NONNULL_PARAM_VIOLATION", "RCN_REDUNDANT_NULLCHECK_OF_NULL_VALUE"})
         private static boolean getLibraryRuleBoolean(List<LibraryRule> libraryRuleList, String libraryRuleName) {
-            LibraryRule libraryRule = Iterables.find(libraryRuleList, lr -> lr != null && lr.getName().equals(libraryRuleName), null);
-            return libraryRule != null && libraryRule.getBool();
+            return libraryRuleList != null &&
+                   libraryRuleList.stream()
+                           .filter(lr -> lr != null && lr.getName().equals(libraryRuleName))
+                           .findAny()
+                           .map(LibraryRule::getBool)
+                           .orElse(false);
         }
 
         public OpenAgencyLibraryRule(LibraryRules vipCoreLibraryRules) {
@@ -118,17 +124,14 @@ public class OpenAgency {
     @Resource(type = ManagedExecutorService.class)
     ExecutorService mes;
 
-    Client client;
-    private ObjectMapper O;
+    private UriBuilder uriBase;
+    private UriBuilder libraryRulesUri;
 
     public OpenAgency() {
-
     }
 
     @PostConstruct
     public void init() {
-        this.client = ClientBuilder.newBuilder().build();
-
         this.libraryRules = new GracefulCache<>(
                 this::provideLibraryRules, mes,
                 config.getOpenAgencyAge(),
@@ -136,7 +139,19 @@ public class OpenAgency {
                 25,
                 config.getOpenAgencyTimeout());
 
-        this.O = new ObjectMapper();
+        this.uriBase = UriBuilder.fromUri(URI.create(config.getVipCoreEndpoint()))
+                .path("api");
+        this.libraryRulesUri = uriBase.clone()
+                // This constant when moved will make the dependency unneeded
+                // <dependency>
+                //     <groupId>dk.dbc</groupId>
+                //     <artifactId>openagency</artifactId>
+                //     <version>1.0.0-SNAPSHOT</version>
+                //     <classifier>vipcore-httpclient</classifier>
+                // </dependency>
+                .path(VipCoreHttpClient.LIBRARY_RULES_PATH)
+                .path("{agencyId}");
+
     }
 
     public OpenAgencyLibraryRule libraryRule(String agencyId) throws PostponedNonFatalQueueError {
@@ -151,12 +166,19 @@ public class OpenAgency {
 
     @SuppressFBWarnings(value = "NP_NONNULL_PARAM_VIOLATION")
     private LibraryRules libraryRulesFromVipCore(String agencyId) {
-        try {
-            final String path = VipCoreHttpClient.LIBRARY_RULES_PATH + agencyId;
-            final String responseFromVipCore = vipCoreHttpClient.getFromVipCore(config.getVipCoreEndpoint(), path);
-            final LibraryRulesResponse libraryRulesResponse = O.readValue(responseFromVipCore, LibraryRulesResponse.class);
-            return libraryRulesResponse == null ? null : Iterables.getFirst(libraryRulesResponse.getLibraryRules(), null);
-        } catch (OpenAgencyException | JsonProcessingException e) {
+        URI uri = libraryRulesUri.build(agencyId);
+        log.debug("Fetching vip-core uri: {}", uri);
+        try (InputStream is = config.getClient()
+                .target(uri)
+                // At the moment we don't have a tracking id
+                //                .register((ClientRequestFilter) (ClientRequestContext context) ->
+                //                        context.getHeaders().putSingle(Constants.XDBCTRACKINGID, "")
+                //                )
+                .request(MediaType.APPLICATION_JSON_TYPE)
+                .buildGet()
+                .invoke(InputStream.class)) {
+            return libraryRulesFromInputStream(is);
+        } catch (IOException e) {
             log.error("OA Exception when fetching from vipCore for agency {}: {}", agencyId, e.getMessage());
             log.debug("OA Exception when fetching from vipCore for agency {}: {}", agencyId, e);
             throw new RuntimeException(e);
@@ -185,6 +207,17 @@ public class OpenAgency {
             }
             String message = String.join(", ", messages);
             throw new RuntimeException(message, ex);
+        }
+    }
+
+    public static LibraryRules libraryRulesFromInputStream(final InputStream is) throws IOException {
+        LibraryRulesResponse libraryRulesResponse = O.readValue(is, LibraryRulesResponse.class);
+        if (libraryRulesResponse != null &&
+            libraryRulesResponse.getLibraryRules() != null &&
+            !libraryRulesResponse.getLibraryRules().isEmpty()) {
+            return libraryRulesResponse.getLibraryRules().get(0);
+        } else {
+            return null;
         }
     }
 
